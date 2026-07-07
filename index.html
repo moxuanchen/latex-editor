@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Markdown & LaTeX 实时编辑器</title>
+    <!-- Google Fonts 带来优雅的现代字体 -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    
+    <!-- 引入 Marked.js 解析 Markdown -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    
+    <!-- 引入 MathJax 3 解析 LaTeX -->
+    <script>
+    window.MathJax = {
+        tex: {
+            inlineMath: [['$', '$'], ['\\(', '\\)']],
+            displayMath: [['$$', '$$'], ['\\[', '\\]']],
+            processEscapes: true
+        },
+        options: {
+            ignoreHtmlClass: 'tex2jax_ignore',
+            processHtmlClass: 'tex2jax_process'
+        },
+        startup: {
+            typeset: false // 我们将手动触发排版
+        }
+    };
+    </script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
+
+    <style>
+        :root {
+            /* 极简、现代、色彩协调的浅色主题 (Minimalist Light Theme) */
+            --bg-color: #f9fafb;       /* 整体极简背景色，极浅的灰 */
+            --header-bg: rgba(255, 255, 255, 0.95); /* 顶部栏纯白，微量透明 */
+            --pane-bg: #ffffff;        /* 编辑区和预览区统一纯白 */
+            
+            --text-main: #111827;      /* 主要文字颜色，深灰偏黑 */
+            --text-editor: #374151;    /* 编辑器文字颜色 */
+            --text-preview: #111827;   /* 预览区文字颜色 */
+            --text-muted: #6b7280;     /* 次要文字颜色 */
+            
+            --accent: #4f46e5;         /* 柔和协调的靛蓝色 */
+            --accent-hover: #4338ca;
+            --border: #e5e7eb;         /* 极淡的边框线 */
+            --border-light: #f3f4f6;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* 顶部导航栏 (极简风格) */
+        header {
+            padding: 0.8rem 2rem;
+            background: var(--header-bg);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 10;
+        }
+
+        .title-group {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        header h1 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: var(--text-main);
+            letter-spacing: -0.01em;
+            margin: 0;
+        }
+
+        .subtitle {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            font-weight: 400;
+            padding-left: 1rem;
+            border-left: 1px solid var(--border);
+        }
+
+        /* 导出按钮（扁平线框风格） */
+        .export-btn {
+            background-color: #ffffff;
+            color: var(--text-main);
+            border: 1px solid var(--border);
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            font-weight: 500;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+        }
+
+        .export-btn:hover {
+            background-color: #f9fafb;
+            border-color: #d1d5db;
+        }
+
+        .export-btn:active {
+            background-color: #f3f4f6;
+        }
+
+        /* 主体工作区 */
+        main {
+            flex: 1;
+            display: flex;
+            gap: 1.5rem;
+            padding: 1.5rem;
+            overflow: hidden;
+        }
+
+        .pane-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: var(--pane-bg);
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+            overflow: hidden;
+            transition: border-color 0.2s;
+        }
+        
+        .pane-container:focus-within {
+            border-color: #d1d5db;
+        }
+
+        .pane-header {
+            padding: 0.6rem 1.25rem;
+            font-size: 0.8rem;
+            font-weight: 500;
+            color: var(--text-muted);
+            background: #ffffff;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .pane-header .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        /* 左侧编辑区 */
+        .dot-editor { background: #d1d5db; }
+
+        #editor {
+            flex: 1;
+            background: transparent;
+            color: var(--text-editor);
+            border: none;
+            padding: 1.5rem 1.5rem 1.5rem 2rem;
+            font-family: 'Fira Code', Consolas, monospace;
+            font-size: 0.95rem;
+            line-height: 1.7;
+            resize: none;
+            outline: none;
+        }
+
+        /* 右侧预览区 */
+        .dot-preview { background: var(--accent); }
+
+        #preview {
+            flex: 1;
+            padding: 2.5rem 3rem;
+            overflow-y: auto;
+            color: var(--text-preview);
+            line-height: 1.8;
+            font-size: 1rem;
+        }
+
+        /* Markdown 排版细节 (优雅干净) */
+        #preview h1, #preview h2, #preview h3, #preview h4 {
+            color: var(--text-main);
+            margin-top: 1.5rem;
+            margin-bottom: 1rem;
+            font-weight: 600;
+        }
+
+        #preview h1 { font-size: 1.75rem; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; margin-top: 2rem; }
+        #preview h2 { font-size: 1.4rem; }
+        #preview h3 { font-size: 1.15rem; }
+
+        #preview p { margin-bottom: 1.25rem; }
+
+        #preview a { color: var(--accent); text-decoration: none; border-bottom: 1px solid transparent; transition: border-color 0.2s; }
+        #preview a:hover { border-bottom-color: var(--accent); }
+
+        #preview code {
+            background: #f3f4f6;
+            color: #be185d;
+            padding: 0.2em 0.4em;
+            border-radius: 4px;
+            font-family: 'Fira Code', monospace;
+            font-size: 0.85em;
+        }
+
+        #preview pre {
+            background: #f9fafb;
+            border: 1px solid var(--border);
+            padding: 1.25rem;
+            border-radius: 6px;
+            overflow-x: auto;
+            margin-bottom: 1.5rem;
+        }
+
+        #preview pre code {
+            background: transparent;
+            color: var(--text-editor);
+            padding: 0;
+            font-size: 0.85em;
+        }
+
+        #preview blockquote {
+            border-left: 3px solid #d1d5db;
+            margin: 0 0 1.5rem 0;
+            padding: 0.2rem 1rem;
+            color: var(--text-muted);
+        }
+
+        #preview table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 1.5rem;
+        }
+
+        #preview th, #preview td {
+            border: 1px solid var(--border);
+            padding: 0.5rem 0.75rem;
+            text-align: left;
+        }
+
+        #preview th {
+            background: #f9fafb;
+            font-weight: 600;
+        }
+
+        /* 极简滚动条 */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #e5e7eb;
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #d1d5db;
+        }
+
+        #preview::-webkit-scrollbar-thumb {
+            background: #e5e7eb;
+        }
+        #preview::-webkit-scrollbar-thumb:hover {
+            background: #d1d5db;
+        }
+
+        /* 按钮 Loading 动画 */
+        .loading {
+            position: relative;
+            pointer-events: none;
+            opacity: 0.8;
+        }
+        .loading::after {
+            content: '';
+            position: absolute;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #fff;
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            right: 12px;
+            top: calc(50% - 8px);
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        /* 打印/导出 PDF 的专属优化样式 */
+        @media print {
+            html, body, main, .preview-container, #preview {
+                display: block !important;
+                height: auto !important;
+                overflow: visible !important;
+                position: static !important;
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+            header, .editor-container, .pane-header, .export-btn {
+                display: none !important;
+            }
+            .preview-container {
+                border: none !important;
+                box-shadow: none !important;
+                background: white !important;
+                border-radius: 0 !important;
+            }
+            #preview {
+                color: black !important;
+            }
+            /* 核心修复：去除首个元素（如标题）的顶部边距，防止 PDF 首页顶部大片留白 */
+            #preview > :first-child {
+                margin-top: 0 !important;
+                padding-top: 0 !important;
+            }
+            /* 防止公式或代码块被跨页截断 */
+            pre, blockquote, table, figure, .MathJax_Display {
+                page-break-inside: avoid;
+            }
+            h1, h2, h3, h4 {
+                page-break-after: avoid;
+            }
+            @page {
+                margin: 15mm 20mm;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="title-group">
+            <h1>Markdown & LaTeX Editor</h1>
+            <span class="subtitle">Markdown & LaTeX 渲染引擎</span>
+        </div>
+        <div style="display: flex; gap: 0.5rem;">
+            <button id="export-img-btn" class="export-btn">
+                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                导出为图片
+            </button>
+            <button id="export-btn" class="export-btn">
+                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                导出为 PDF
+            </button>
+        </div>
+    </header>
+
+    <main>
+        <!-- 左侧编辑区 -->
+        <div class="pane-container editor-container">
+            <div class="pane-header">
+                <div class="dot dot-editor"></div>
+                Markdown / LaTeX 输入区
+            </div>
+            <textarea id="editor" spellcheck="false" placeholder="在此输入 Markdown 或 LaTeX 代码..."></textarea>
+        </div>
+
+        <!-- 右侧预览区 -->
+        <div class="pane-container preview-container">
+            <div class="pane-header">
+                <div class="dot dot-preview"></div>
+                实时渲染效果
+            </div>
+            <div id="preview" class="tex2jax_process"></div>
+        </div>
+    </main>
+
+    <script>
+        const editor = document.getElementById('editor');
+        const preview = document.getElementById('preview');
+        const exportBtn = document.getElementById('export-btn');
+
+        /**
+         * 自定义 Marked.js 扩展
+         * 目的: 优先匹配并提取所有 LaTeX 数学公式，直接作为原始文本输出，
+         * 从而避免 Markdown 引擎将其内部的特殊符号(如 _, *, \( ) 错误转义或格式化。
+         */
+        const mathExtension = {
+            name: 'math',
+            level: 'inline',
+            start(src) {
+                return src.match(/\$|\\\[|\\\(/)?.index;
+            },
+            tokenizer(src, tokens) {
+                let match;
+                // 块级公式: $$ ... $$
+                if (match = /^\$\$([\s\S]+?)\$\$/.exec(src)) {
+                    return { type: 'math', raw: match[0], text: match[0] };
+                }
+                // 块级公式: \[ ... \]
+                if (match = /^\\\[([\s\S]+?)\\\]/.exec(src)) {
+                    return { type: 'math', raw: match[0], text: match[0] };
+                }
+                // 行内公式: \( ... \)
+                if (match = /^\\\(([\s\S]+?)\\\)/.exec(src)) {
+                    return { type: 'math', raw: match[0], text: match[0] };
+                }
+                // 行内公式: $ ... $
+                // (?:\\.|[^$\\]) 允许公式内出现被转义的 \$
+                if (match = /^\$((?:\\.|[^$\\])+?)\$/.exec(src)) {
+                    return { type: 'math', raw: match[0], text: match[0] };
+                }
+            },
+            renderer(token) {
+                // 直接返回未篡改的原始公式文本，之后交由 MathJax 处理
+                return token.raw;
+            }
+        };
+
+        marked.use({ extensions: [mathExtension] });
+
+        const defaultContent = `# 欢迎使用 Antigravity Editor
+
+这是一个支持 **Markdown** 和 **LaTeX** 混合排版的现代编辑器。左侧输入，右侧实时无缝渲染。
+
+## 1. 数学公式支持
+
+引擎不仅支持经典的 \`$\`，也完美支持 \`\\(\` 和 \`\\[\` 包裹的公式。
+
+### 行内公式 (Inline)
+爱因斯坦的质能方程是 $E = mc^2$，或者写成欧拉公式： \\( e^{i\\pi} + 1 = 0 \\)。  
+可以看到，公式里的下划线如 $a_i$ 绝不会被错误渲染为斜体。
+
+### 块级公式 (Block)
+使用 \`$$\` 包裹：
+$$
+f(x) = \\int_{-\\infty}^\\infty \\hat f(\\xi)\\,e^{2 \\pi i \\xi x} \\,d\\xi
+$$
+
+或者使用 \`\\[\` 和 \`\\]\` 包裹：
+\\[
+\\mathbf{V}_1 \\times \\mathbf{V}_2 =  \\begin{vmatrix} 
+\\mathbf{i} & \\mathbf{j} & \\mathbf{k} \\\\
+\\frac{\\partial X}{\\partial u} &  \\frac{\\partial Y}{\\partial u} & 0 \\\\
+\\frac{\\partial X}{\\partial v} &  \\frac{\\partial Y}{\\partial v} & 0 \\\\
+\\end{vmatrix}  
+\\]
+
+## 2. 范围符号测试 (~)
+
+对于波浪号，系统将其当作普通文本处理。**不会**将其错误识别为删除线！
+例如：
+- 温度范围是 **10~20** 度。
+- 工作波长是 **400~700nm**。
+
+## 3. 代码与样式
+
+\`\`\`javascript
+// 防抖动渲染引擎
+editor.addEventListener('input', () => {
+    clearTimeout(renderTimeout);
+    renderTimeout = setTimeout(renderPreview, 300);
+});
+\`\`\`
+
+> 💡 提示：点击右上角的 **导出 PDF** 按钮，即可将这份精美的排版生成带有清晰矢量的 PDF 文档。
+`;
+
+        editor.value = defaultContent;
+
+        // 渲染流程
+        let renderTimeout;
+        const renderPreview = () => {
+            const rawText = editor.value;
+            // 1. 通过 Marked 转化为 HTML
+            const html = marked.parse(rawText);
+            preview.innerHTML = html;
+            
+            // 2. 呼叫 MathJax 进行 LaTeX 渲染
+            if (window.MathJax && window.MathJax.typesetPromise) {
+                MathJax.typesetPromise([preview]).catch(err => console.error('MathJax 渲染错误:', err));
+            }
+        };
+
+        // 监听文本框输入，采用 300ms 防抖保证流畅度
+        editor.addEventListener('input', () => {
+            clearTimeout(renderTimeout);
+            renderTimeout = setTimeout(renderPreview, 300);
+        });
+
+        // ==========================================
+        // 简易等比例同步滚动 (方案 B)
+        // ==========================================
+        let isSyncingLeft = false;
+        let isSyncingRight = false;
+
+        editor.addEventListener('scroll', () => {
+            if (!isSyncingLeft) {
+                isSyncingRight = true;
+                const percentage = editor.scrollTop / (editor.scrollHeight - editor.clientHeight);
+                // 防御性检查，防止 NaN
+                if (!isNaN(percentage)) {
+                    preview.scrollTop = percentage * (preview.scrollHeight - preview.clientHeight);
+                }
+            }
+            isSyncingLeft = false;
+        });
+
+        preview.addEventListener('scroll', () => {
+            if (!isSyncingRight) {
+                isSyncingLeft = true;
+                const percentage = preview.scrollTop / (preview.scrollHeight - preview.clientHeight);
+                if (!isNaN(percentage)) {
+                    editor.scrollTop = percentage * (editor.scrollHeight - editor.clientHeight);
+                }
+            }
+            isSyncingRight = false;
+        });
+
+        const exportImgBtn = document.getElementById('export-img-btn');
+
+        // 导出为图片功能
+        exportImgBtn.addEventListener('click', () => {
+            exportImgBtn.classList.add('loading');
+            exportImgBtn.disabled = true;
+            
+            // 为防止截图截断，临时放开高度限制
+            const originalOverflow = preview.style.overflow;
+            const originalHeight = preview.style.height;
+            preview.style.overflow = 'visible';
+            preview.style.height = 'max-content';
+            
+            html2canvas(preview, { scale: 2, useCORS: true, backgroundColor: '#ffffff' }).then(canvas => {
+                preview.style.overflow = originalOverflow;
+                preview.style.height = originalHeight;
+                
+                const link = document.createElement('a');
+                link.download = 'Document_Export.png';
+                link.href = canvas.toDataURL('image/png');
+                link.click();
+                
+                exportImgBtn.classList.remove('loading');
+                exportImgBtn.disabled = false;
+            }).catch(err => {
+                preview.style.overflow = originalOverflow;
+                preview.style.height = originalHeight;
+                exportImgBtn.classList.remove('loading');
+                exportImgBtn.disabled = false;
+                console.error(err);
+                alert('图片导出失败');
+            });
+        });
+
+        // 导出为 PDF 功能
+        exportBtn.addEventListener('click', () => {
+            window.print();
+        });
+
+        // 页面初始化完成后的初次渲染
+        window.onload = () => {
+            // 给 MathJax 一些初始化时间后执行首次渲染
+            setTimeout(renderPreview, 500); 
+        };
+    </script>
+</body>
+</html>
