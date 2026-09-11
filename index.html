@@ -313,13 +313,6 @@
             background: #d1d5db;
         }
 
-        #preview::-webkit-scrollbar-thumb {
-            background: #e5e7eb;
-        }
-        #preview::-webkit-scrollbar-thumb:hover {
-            background: #d1d5db;
-        }
-
         /* 按钮 Loading 动画 */
         .loading {
             position: relative;
@@ -331,7 +324,8 @@
             position: absolute;
             width: 16px;
             height: 16px;
-            border: 2px solid #fff;
+            /* 描边必须可见：按钮本身是白底，白色描边等于没有加载反馈 */
+            border: 2px solid var(--accent);
             border-top-color: transparent;
             border-radius: 50%;
             animation: spin 0.8s linear infinite;
@@ -341,6 +335,32 @@
         @keyframes spin {
             to { transform: rotate(360deg); }
         }
+        /* 窄屏: 改为上下分栏，避免左右两栏被挤压到不可用的宽度 */
+        @media (max-width: 900px) {
+            header {
+                padding: 0.6rem 1rem;
+                flex-wrap: wrap;
+                gap: 0.6rem;
+            }
+            .subtitle {
+                display: none;
+            }
+            main {
+                flex-direction: column;
+                padding: 1rem;
+                gap: 1rem;
+            }
+            .pane-container {
+                min-height: 0;
+            }
+            #editor {
+                padding: 1rem;
+            }
+            #preview {
+                padding: 1.25rem;
+            }
+        }
+
         /* 打印/导出 PDF 的专属优化样式 */
         @media print {
             html, body, main, .preview-container, #preview {
@@ -351,7 +371,7 @@
                 margin: 0 !important;
                 padding: 0 !important;
             }
-            header, .editor-container, .pane-header, .export-btn {
+            header, .editor-container, .pane-header, .export-btn, .notice {
                 display: none !important;
             }
             .preview-container {
@@ -412,6 +432,10 @@
 
     <div id="notice" class="notice" role="alert" hidden></div>
 
+    <noscript>
+        <div class="notice error">当前浏览器已禁用 JavaScript，编辑器无法工作，请开启后重试。</div>
+    </noscript>
+
     <main>
         <!-- 左侧编辑区 -->
         <div class="pane-container editor-container">
@@ -419,7 +443,7 @@
                 <div class="dot dot-editor"></div>
                 Markdown / LaTeX 输入区
             </div>
-            <textarea id="editor" spellcheck="false" placeholder="在此输入 Markdown 或 LaTeX 代码..."></textarea>
+            <textarea id="editor" spellcheck="false" aria-label="Markdown 与 LaTeX 源码输入区" placeholder="在此输入 Markdown 或 LaTeX 代码..."></textarea>
         </div>
 
         <!-- 右侧预览区 -->
@@ -526,7 +550,7 @@
             marked.use({ extensions: [mathExtension] });
         }
 
-        const defaultContent = `# 欢迎使用 Antigravity Editor
+        const defaultContent = `# 欢迎使用 Markdown & LaTeX 编辑器
 
 这是一个支持 **Markdown** 和 **LaTeX** 混合排版的现代编辑器。左侧输入，右侧实时无缝渲染。
 
