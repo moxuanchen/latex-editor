@@ -621,6 +621,7 @@ editor.addEventListener('input', () => {
 
         // 渲染流程
         let renderTimeout;
+        let lastRendered = null;
 
         // 呼叫 MathJax 进行 LaTeX 渲染；尚未就绪时跳过，由就绪回调补渲染
         const typesetMath = () => {
@@ -633,19 +634,26 @@ editor.addEventListener('input', () => {
             return Promise.resolve();
         };
 
-        const renderPreview = () => {
+        const renderPreview = (force) => {
             if (!hasMarked) return;
+            const rawText = editor.value;
+
+            // 内容未变化时只补排版，避免重复构建 DOM 造成的整块重排
+            if (!force && rawText === lastRendered) {
+                return typesetMath();
+            }
 
             // 1. 通过 Marked 转化为 HTML
             let html;
             try {
-                html = marked.parse(editor.value);
+                html = marked.parse(rawText);
             } catch (err) {
                 // 解析异常时保留上一次的预览结果，避免整块区域变成空白
                 console.error(err);
                 showNotice('内容解析失败，已保留上一次渲染结果。', 'error');
                 return;
             }
+            lastRendered = rawText;
             preview.innerHTML = sanitizeHtml(html);
 
             // 2. 渲染 LaTeX
@@ -656,7 +664,8 @@ editor.addEventListener('input', () => {
         let saveTimeout;
         editor.addEventListener('input', () => {
             clearTimeout(renderTimeout);
-            renderTimeout = setTimeout(renderPreview, 300);
+            // 渲染对齐到下一帧绘制，避免在同一帧内反复触发重排
+            renderTimeout = setTimeout(() => requestAnimationFrame(() => renderPreview()), 300);
             // 草稿写入不必跟随每次渲染，1s 防抖即可
             clearTimeout(saveTimeout);
             saveTimeout = setTimeout(saveDraft, 1000);
@@ -667,28 +676,42 @@ editor.addEventListener('input', () => {
         // ==========================================
         let isSyncingLeft = false;
         let isSyncingRight = false;
+        let leftSyncFrame = 0;
+        let rightSyncFrame = 0;
+
+        // 按比例同步滚动；任一侧无滚动空间时直接跳过
+        const syncScroll = (from, to) => {
+            const fromRange = from.scrollHeight - from.clientHeight;
+            const toRange = to.scrollHeight - to.clientHeight;
+            if (fromRange <= 0 || toRange <= 0) return;
+            to.scrollTop = (from.scrollTop / fromRange) * toRange;
+        };
 
         editor.addEventListener('scroll', () => {
-            if (!isSyncingLeft) {
-                isSyncingRight = true;
-                const percentage = editor.scrollTop / (editor.scrollHeight - editor.clientHeight);
-                // 防御性检查，防止 NaN
-                if (!isNaN(percentage)) {
-                    preview.scrollTop = percentage * (preview.scrollHeight - preview.clientHeight);
-                }
+            if (isSyncingLeft) {
+                isSyncingLeft = false;
+                return;
             }
-            isSyncingLeft = false;
+            // 用 rAF 合并高频滚动事件，避免每次滚动都读写布局
+            if (leftSyncFrame) return;
+            leftSyncFrame = requestAnimationFrame(() => {
+                leftSyncFrame = 0;
+                isSyncingRight = true;
+                syncScroll(editor, preview);
+            });
         });
 
         preview.addEventListener('scroll', () => {
-            if (!isSyncingRight) {
-                isSyncingLeft = true;
-                const percentage = preview.scrollTop / (preview.scrollHeight - preview.clientHeight);
-                if (!isNaN(percentage)) {
-                    editor.scrollTop = percentage * (editor.scrollHeight - editor.clientHeight);
-                }
+            if (isSyncingRight) {
+                isSyncingRight = false;
+                return;
             }
-            isSyncingRight = false;
+            if (rightSyncFrame) return;
+            rightSyncFrame = requestAnimationFrame(() => {
+                rightSyncFrame = 0;
+                isSyncingLeft = true;
+                syncScroll(preview, editor);
+            });
         });
 
         // 打开本地 Markdown 文件
@@ -784,10 +807,10 @@ editor.addEventListener('input', () => {
 
         // 页面初始化完成后的初次渲染
         window.addEventListener('load', () => {
-            // 先渲染正文，公式引擎就绪后再排版一次，慢网下也不会漏渲染
+            // 先渲染正文，公式引擎就绪后补排版，慢网下也不会漏渲染
             renderPreview();
             whenMathJaxReady()
-                .then(() => renderPreview())
+                .then(() => typesetMath())
                 .catch(() => showNotice('公式引擎(MathJax)加载失败，公式将以源码形式显示。', 'error'));
         });
     </script>
