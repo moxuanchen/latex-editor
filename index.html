@@ -297,6 +297,20 @@
             font-weight: 600;
         }
 
+        /* 块级公式: 宽度超出内容区时在公式容器内部横向滚动，
+           既不让页面出现横向滚动条，也不把预览区撑宽或影响相邻元素排版。
+           注: 选择器不绑定具体 jax，SVG / CHTML 输出都适用。 */
+        #preview mjx-container[display="true"] {
+            display: block;
+            max-width: 100%;
+            overflow-x: auto;
+            overflow-y: hidden;
+            /* 为横向滚动条预留空间，避免 overlay 滚动条压住公式底部 */
+            padding-bottom: 0.35rem;
+            /* 触屏设备保持惯性滑动 */
+            -webkit-overflow-scrolling: touch;
+        }
+
         /* 极简滚动条 */
         ::-webkit-scrollbar {
             width: 6px;
