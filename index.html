@@ -16,6 +16,11 @@
     <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js"
             integrity="sha384-948ahk4ZmxYVYOc+rxN1H2gM1EJ2Duhp7uHtZ4WSLkV4Vtx5MUqnV+l7u9B+jFv+"
             crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+
+    <!-- 引入 DOMPurify 净化 marked 的 HTML 输出，阻断 XSS -->
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js"
+            integrity="sha384-eEu5CTj3qGvu9PdJuS+YlkNi7d2XxQROAFYOr59zgObtlcux1ae1Il3u7jvdCSWu"
+            crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     
     <!-- 引入 MathJax 3 解析 LaTeX -->
     <script>
@@ -450,9 +455,21 @@
 
         // ---- 依赖守卫：CDN 不可达时明确提示，而不是留给用户一个空页面 ----
         const hasMarked = typeof marked !== 'undefined';
-        if (!hasMarked) {
-            showNotice('Markdown 引擎(marked)加载失败，请检查网络或 CDN 可用性；当前无法渲染预览。', 'error');
+        const hasPurifier = typeof DOMPurify !== 'undefined';
+        const missingDeps = [];
+        if (!hasMarked) missingDeps.push('marked(Markdown 解析)');
+        if (!hasPurifier) missingDeps.push('DOMPurify(安全过滤)');
+        if (missingDeps.length) {
+            const tail = hasMarked ? '预览将退化为纯文本显示以保证安全。' : '当前无法渲染预览。';
+            showNotice('以下依赖加载失败：' + missingDeps.join('、') + '，请检查网络或 CDN 可用性。' + tail, 'error');
         }
+
+        // marked 的 HTML 输出会直接写进 innerHTML，必须先净化；
+        // 净化器缺失时退化为实体转义，宁可显示源码也不执行脚本
+        const escapeHtml = (text) => text.replace(/[&<>"']/g, (ch) => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        }[ch]));
+        const sanitizeHtml = (html) => (hasPurifier ? DOMPurify.sanitize(html) : escapeHtml(html));
 
         /**
          * 自定义 Marked.js 扩展
@@ -574,7 +591,7 @@ editor.addEventListener('input', () => {
                 showNotice('内容解析失败，已保留上一次渲染结果。', 'error');
                 return;
             }
-            preview.innerHTML = html;
+            preview.innerHTML = sanitizeHtml(html);
 
             // 2. 渲染 LaTeX
             typesetMath();
