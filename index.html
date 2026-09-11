@@ -388,16 +388,26 @@
             <span class="subtitle">Markdown & LaTeX 渲染引擎</span>
         </div>
         <div style="display: flex; gap: 0.5rem;">
-            <button id="export-img-btn" class="export-btn">
+            <button id="open-btn" class="export-btn" aria-label="打开本地 Markdown 文件" title="打开本地 .md 文件">
+                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4-4m0 0L8 12m4-4v12"></path></svg>
+                打开
+            </button>
+            <button id="save-btn" class="export-btn" aria-label="保存为 Markdown 文件" title="保存为 .md 文件 (Ctrl+S)">
+                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 21v-8H7v8M7 3v5h8"></path></svg>
+                保存
+            </button>
+            <button id="export-img-btn" class="export-btn" aria-label="导出为 PNG 图片" title="导出为 PNG 图片">
                 <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
                 导出为图片
             </button>
-            <button id="export-btn" class="export-btn">
+            <button id="export-btn" class="export-btn" aria-label="通过打印导出 PDF" title="通过浏览器打印对话框另存为 PDF">
                 <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
                 导出为 PDF
             </button>
         </div>
     </header>
+
+    <input type="file" id="file-input" accept=".md,.markdown,.txt,text/markdown,text/plain" hidden>
 
     <div id="notice" class="notice" role="alert" hidden></div>
 
@@ -562,7 +572,51 @@ editor.addEventListener('input', () => {
 > 💡 提示：点击右上角的 **导出 PDF** 按钮，即可将这份精美的排版生成带有清晰矢量的 PDF 文档。
 `;
 
-        editor.value = defaultContent;
+        // ==========================================
+        // 本地持久化：草稿自动保存 + Markdown 文件导入导出
+        // ==========================================
+        const STORAGE_KEY = 'latex-editor:draft';
+        const fileInput = document.getElementById('file-input');
+        const openBtn = document.getElementById('open-btn');
+        const saveBtn = document.getElementById('save-btn');
+
+        // 隐私模式或配额受限时 localStorage 会抛错，不能让它影响主流程
+        const restoreDraft = () => {
+            try {
+                return localStorage.getItem(STORAGE_KEY);
+            } catch (err) {
+                console.warn('草稿读取失败:', err);
+                return null;
+            }
+        };
+
+        const saveDraft = () => {
+            try {
+                localStorage.setItem(STORAGE_KEY, editor.value);
+            } catch (err) {
+                console.warn('草稿保存失败:', err);
+            }
+        };
+
+        const timestamp = () => {
+            const now = new Date();
+            const pad = (n) => String(n).padStart(2, '0');
+            return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`
+                + `-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+        };
+
+        const downloadBlob = (blob, filename) => {
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filename;
+            link.click();
+            // 立即回收可能中断下载，延后到下一轮事件循环
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        };
+
+        const savedDraft = restoreDraft();
+        editor.value = savedDraft === null ? defaultContent : savedDraft;
 
         // 渲染流程
         let renderTimeout;
@@ -598,9 +652,13 @@ editor.addEventListener('input', () => {
         };
 
         // 监听文本框输入，采用 300ms 防抖保证流畅度
+        let saveTimeout;
         editor.addEventListener('input', () => {
             clearTimeout(renderTimeout);
             renderTimeout = setTimeout(renderPreview, 300);
+            // 草稿写入不必跟随每次渲染，1s 防抖即可
+            clearTimeout(saveTimeout);
+            saveTimeout = setTimeout(saveDraft, 1000);
         });
 
         // ==========================================
@@ -630,6 +688,40 @@ editor.addEventListener('input', () => {
                 }
             }
             isSyncingRight = false;
+        });
+
+        // 打开本地 Markdown 文件
+        openBtn.addEventListener('click', () => fileInput.click());
+
+        fileInput.addEventListener('change', () => {
+            const file = fileInput.files && fileInput.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = () => {
+                editor.value = String(reader.result || '');
+                saveDraft();
+                renderPreview();
+                showNotice('已载入文件：' + file.name);
+            };
+            reader.onerror = () => showNotice('文件读取失败：' + file.name, 'error');
+            reader.readAsText(file, 'utf-8');
+            // 清空以便重复选择同一个文件时仍能触发 change
+            fileInput.value = '';
+        });
+
+        // 保存为 .md 文件，并支持 Ctrl/Cmd + S
+        saveBtn.addEventListener('click', () => {
+            saveDraft();
+            const blob = new Blob([editor.value], { type: 'text/markdown;charset=utf-8' });
+            downloadBlob(blob, `Document_${timestamp()}.md`);
+            showNotice('已保存为 Markdown 文件。');
+        });
+
+        window.addEventListener('keydown', (event) => {
+            if ((event.ctrlKey || event.metaKey) && (event.key === 's' || event.key === 'S')) {
+                event.preventDefault();
+                saveBtn.click();
+            }
         });
 
         const exportImgBtn = document.getElementById('export-img-btn');
