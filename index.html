@@ -560,8 +560,41 @@
             }
         };
 
+        /**
+         * 自定义 Marked.js 块级扩展
+         * 目的: 在块级解析阶段就认定 $$...$$ 与 \[...\] 是公式块。
+         * 否则当公式内部存在单独成行的 "=" 或 "-"（LaTeX 中常见的换行对齐写法）时，
+         * Markdown 的 setext 标题规则会把整块公式解析成 <h1>/<h2>：公式既不会被
+         * MathJax 渲染，源码中的 * 等符号还会被当成强调标记，其长串文本更会撑宽
+         * 预览区，产生无法消除的横向滚动条。
+         */
+        const mathBlockExtension = {
+            name: 'mathBlock',
+            level: 'block',
+            start(src) {
+                const found = src.match(/^(?:\$\$|\\\[)/m);
+                return found ? found.index : undefined;
+            },
+            tokenizer(src) {
+                // 公式块内部不允许出现空行，避免把后面的正文一起吞掉
+                let match = /^\$\$([\s\S]*?)\$\$[ \t]*(?:\n+|$)/.exec(src);
+                if (match && !/\n[ \t]*\n/.test(match[1])) {
+                    return { type: 'mathBlock', raw: match[0], text: match[0].trim() };
+                }
+                match = /^\\\[([\s\S]*?)\\\][ \t]*(?:\n+|$)/.exec(src);
+                if (match && !/\n[ \t]*\n/.test(match[1])) {
+                    return { type: 'mathBlock', raw: match[0], text: match[0].trim() };
+                }
+            },
+            renderer(token) {
+                // 内容保持原样，交由 MathJax 排版
+                return '<p>' + token.text + '</p>';
+            }
+        };
+
         if (hasMarked) {
-            marked.use({ extensions: [mathExtension] });
+            // 块级扩展需先于行内扩展注册，公式块才不会落入标题/段落误判
+            marked.use({ extensions: [mathBlockExtension, mathExtension] });
         }
 
         const defaultContent = `# 欢迎使用 Markdown & LaTeX 编辑器
