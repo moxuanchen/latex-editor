@@ -651,11 +651,28 @@ editor.addEventListener('input', () => {
             window.print();
         });
 
+        // MathJax 加载完成的信号，避免用固定延时猜测就绪时机
+        const whenMathJaxReady = () => new Promise((resolve, reject) => {
+            const startedAt = Date.now();
+            const timer = setInterval(() => {
+                if (window.MathJax && window.MathJax.startup && window.MathJax.startup.promise) {
+                    clearInterval(timer);
+                    resolve(window.MathJax.startup.promise);
+                } else if (Date.now() - startedAt > 15000) {
+                    clearInterval(timer);
+                    reject(new Error('MathJax 加载超时'));
+                }
+            }, 200);
+        });
+
         // 页面初始化完成后的初次渲染
-        window.onload = () => {
-            // 给 MathJax 一些初始化时间后执行首次渲染
-            setTimeout(renderPreview, 500); 
-        };
+        window.addEventListener('load', () => {
+            // 先渲染正文，公式引擎就绪后再排版一次，慢网下也不会漏渲染
+            renderPreview();
+            whenMathJaxReady()
+                .then(() => renderPreview())
+                .catch(() => showNotice('公式引擎(MathJax)加载失败，公式将以源码形式显示。', 'error'));
+        });
     </script>
 </body>
 </html>
