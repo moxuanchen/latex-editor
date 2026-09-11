@@ -40,11 +40,12 @@
     };
     </script>
     <script id="MathJax-script" async
-            integrity="sha384-Wuix6BuhrWbjDBs24bXrjf4ZQ5aFeFWBuKkFekO2t8xFU0iNaLQfp2K6/1Nxveei"
+            integrity="sha384-KKWa9jJ1MZvssLeOoXG6FiOAZfAgmzsIIfw8BXwI9+kYm0lPCbC6yTQPBC00F1/L"
             crossorigin="anonymous" referrerpolicy="no-referrer"
-            src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-mml-chtml.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"
-            integrity="sha384-ZZ1pncU3bQe8y31yfZdMFdSpttDoPmOZg2wguVK9almUodir1PghgT0eY7Mrty8H"
+            src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-svg.js"></script>
+    <!-- 引入 html-to-image 导出图片（对 MathJax SVG 输出的还原度远好于已停更的 html2canvas） -->
+    <script src="https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/dist/html-to-image.min.js"
+            integrity="sha384-lELZMVO0WZSKHeOrm8rKLCq9ZXjY1+2I9uL/QyDxIXSd83b3/z5xBXb1uDoFi3P/"
             crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 
 
@@ -727,40 +728,44 @@ editor.addEventListener('input', () => {
         const exportImgBtn = document.getElementById('export-img-btn');
 
         // 导出为图片功能
-        exportImgBtn.addEventListener('click', () => {
-            exportImgBtn.classList.add('loading');
-            exportImgBtn.disabled = true;
-            
+        const setExporting = (btn, exporting) => {
+            btn.classList.toggle('loading', exporting);
+            btn.disabled = exporting;
+        };
+
+        exportImgBtn.addEventListener('click', async () => {
+            setExporting(exportImgBtn, true);
+
             // 为防止截图截断，临时放开高度限制
             const originalOverflow = preview.style.overflow;
             const originalHeight = preview.style.height;
             preview.style.overflow = 'visible';
             preview.style.height = 'max-content';
-            
-            html2canvas(preview, { scale: 2, useCORS: true, backgroundColor: '#ffffff' }).then(canvas => {
-                preview.style.overflow = originalOverflow;
-                preview.style.height = originalHeight;
-                
-                const link = document.createElement('a');
-                link.download = 'Document_Export.png';
-                link.href = canvas.toDataURL('image/png');
-                link.click();
-                
-                exportImgBtn.classList.remove('loading');
-                exportImgBtn.disabled = false;
-            }).catch(err => {
-                preview.style.overflow = originalOverflow;
-                preview.style.height = originalHeight;
-                exportImgBtn.classList.remove('loading');
-                exportImgBtn.disabled = false;
+
+            try {
+                // 等待公式排版完成，否则会截到尚未渲染的公式源码
+                await typesetMath();
+                const blob = await window.htmlToImage.toBlob(preview, {
+                    pixelRatio: 2,
+                    backgroundColor: '#ffffff'
+                });
+                // 用 Blob 而非 dataURL，避免长文档超出 data URL 长度上限
+                downloadBlob(blob, `Document_Export_${timestamp()}.png`);
+            } catch (err) {
                 console.error(err);
-                alert('图片导出失败');
-            });
+                showNotice('图片导出失败：' + (err && err.message ? err.message : err), 'error');
+            } finally {
+                // 无论成功失败都要复原，否则按钮会永久停在 loading 状态
+                preview.style.overflow = originalOverflow;
+                preview.style.height = originalHeight;
+                setExporting(exportImgBtn, false);
+            }
         });
 
-        // 导出为 PDF 功能
+        // 导出为 PDF 功能（通过浏览器打印对话框另存为 PDF）
         exportBtn.addEventListener('click', () => {
-            window.print();
+            // 打印前确保公式已排版完成，否则打印出来的是公式源码
+            typesetMath().finally(() => window.print());
         });
 
         // MathJax 加载完成的信号，避免用固定延时猜测就绪时机
