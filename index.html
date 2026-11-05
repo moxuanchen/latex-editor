@@ -555,16 +555,21 @@
                 }
                 // 行内公式: $ ... $
                 // (?:\\.|[^$\\]) 允许公式内出现被转义的 \$
+                // 收尾用 (?:\\.|[^\s$\\])：最后一个字符既可以是普通字符，也可以是
+                // \% 这类转义对 —— 否则 $\sigma\%$ 匹配失败，\% 会被 Markdown 还原成
+                // %，再被 MathJax 当成 TeX 注释，百分号就丢了
                 // 额外约束: 起始 $ 后与结束 $ 前都不能是空白，且内容不跨行 —— 否则
                 // "价格 $5 到 $10" 这类文本会被当成公式，渲染成斜体的 "5 到"
                 // 注: 不使用后行断言 (?<!\s)，以兼容 Safari 16.4 以下版本
-                if (match = /^\$(?!\s)((?:\\.|[^\n$\\])*?[^\s])\$(?!\d)/.exec(src)) {
+                if (match = /^\$(?!\s)((?:\\.|[^\n$\\])*?)(?:\\.|[^\s$\\])\$(?!\d)/.exec(src)) {
                     return { type: 'math', raw: match[0], text: match[0] };
                 }
             },
             renderer(token) {
-                // 直接返回未篡改的原始公式文本，之后交由 MathJax 处理
-                return token.raw;
+                // 原始公式文本先转成 HTML 实体，再交给 MathJax。
+                // MathJax 读的是 textContent，实体还原后仍是原公式；若直接拼进 HTML，
+                // 像 $0<K_1<0.25$ 里的 "<K" 会被浏览器当成标签，吞掉后面的正文。
+                return escapeHtml(token.raw);
             }
         };
 
@@ -595,8 +600,8 @@
                 }
             },
             renderer(token) {
-                // 内容保持原样，交由 MathJax 排版
-                return '<p>' + token.text + '</p>';
+                // 同样先做 HTML 转义，避免公式里的 < & 被净化阶段解析成标签/实体
+                return '<p>' + escapeHtml(token.text) + '</p>';
             }
         };
 
