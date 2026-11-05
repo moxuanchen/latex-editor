@@ -185,6 +185,12 @@
             border-color: #d1d5db;
         }
 
+        /* 拖放文件悬停在编辑区时的提示态 */
+        .editor-container.dragging {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.15);
+        }
+
         .pane-header {
             padding: 0.6rem 1.25rem;
             font-size: 0.8rem;
@@ -457,7 +463,7 @@
                 <div class="dot dot-editor"></div>
                 Markdown / LaTeX 输入区
             </div>
-            <textarea id="editor" spellcheck="false" aria-label="Markdown 与 LaTeX 源码输入区" placeholder="在此输入 Markdown 或 LaTeX 代码..."></textarea>
+            <textarea id="editor" spellcheck="false" aria-label="Markdown 与 LaTeX 源码输入区" placeholder="在此输入 Markdown 或 LaTeX 代码，或将 .md 文件拖到左侧导入..."></textarea>
         </div>
 
         <!-- 右侧预览区 -->
@@ -788,9 +794,14 @@ editor.addEventListener('input', () => {
         // 打开本地 Markdown 文件
         openBtn.addEventListener('click', () => fileInput.click());
 
-        fileInput.addEventListener('change', () => {
-            const file = fileInput.files && fileInput.files[0];
-            if (!file) return;
+        // 读取本地文件并载入编辑器（“打开”按钮与拖放共用同一条路径）
+        const ACCEPTED_FILE = /\.(md|markdown|txt)$/i;
+        const loadFile = (file) => {
+            // 拖放不受 input 的 accept 约束，这里补上类型校验，避免把二进制文件当文本读入
+            if (!ACCEPTED_FILE.test(file.name) && !(file.type || '').startsWith('text/')) {
+                showNotice('仅支持 Markdown 或文本文件：' + file.name, 'error');
+                return;
+            }
             const reader = new FileReader();
             reader.onload = () => {
                 editor.value = String(reader.result || '');
@@ -800,8 +811,39 @@ editor.addEventListener('input', () => {
             };
             reader.onerror = () => showNotice('文件读取失败：' + file.name, 'error');
             reader.readAsText(file, 'utf-8');
+        };
+
+        fileInput.addEventListener('change', () => {
+            const file = fileInput.files && fileInput.files[0];
+            if (file) loadFile(file);
             // 清空以便重复选择同一个文件时仍能触发 change
             fileInput.value = '';
+        });
+
+        // 直接把文件拖到左侧编辑区即可导入
+        const editorPane = document.querySelector('.editor-container');
+        const hasFiles = (event) => event.dataTransfer
+            && Array.from(event.dataTransfer.types).includes('Files');
+
+        editorPane.addEventListener('dragover', (event) => {
+            // 拖拽文字等普通内容时保持默认行为，不拦截
+            if (!hasFiles(event)) return;
+            event.preventDefault(); // 阻止默认，否则浏览器会把文件直接打开而不是交给我们处理
+            event.dataTransfer.dropEffect = 'copy';
+            editorPane.classList.add('dragging');
+        });
+
+        editorPane.addEventListener('dragleave', (event) => {
+            // 在子元素之间移动时不清除，避免高亮闪烁
+            if (!editorPane.contains(event.relatedTarget)) editorPane.classList.remove('dragging');
+        });
+
+        editorPane.addEventListener('drop', (event) => {
+            if (!hasFiles(event)) return;
+            event.preventDefault();
+            editorPane.classList.remove('dragging');
+            const file = event.dataTransfer.files[0];
+            if (file) loadFile(file);
         });
 
         // 保存为 .md 文件，并支持 Ctrl/Cmd + S
