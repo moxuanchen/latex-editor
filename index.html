@@ -520,6 +520,8 @@
         }
 
         // marked 的 HTML 输出会直接写进 innerHTML，必须先净化；
+        // 沿用 DOMPurify 默认白名单：保留 <style>/style 属性与常用 SVG 元素（支持内嵌 HTML/CSS/SVG），
+        // 同时移除 <script>、on* 事件、<iframe>、foreignObject 等可执行或可外联的内容。
         // 净化器缺失时退化为实体转义，宁可显示源码也不执行脚本
         const escapeHtml = (text) => text.replace(/[&<>"']/g, (ch) => ({
             '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -598,9 +600,34 @@
             }
         };
 
+        /**
+         * 自定义 Marked.js 块级扩展
+         * 目的: 让整段内联 <svg> 原样进入预览区。
+         * <svg> 不在 CommonMark 的块级标签名单里，多行 SVG 会被当成普通段落解析，
+         * 元素之间的换行和文本里的 _ * 会被 Markdown 处理，图形随即错乱。
+         * SVG 内部允许空行，所以一直吃到配对的 </svg>，而不是遇到空行就停。
+         */
+        const svgBlockExtension = {
+            name: 'svgBlock',
+            level: 'block',
+            start(src) {
+                const found = src.match(/^<svg\b/im);
+                return found ? found.index : undefined;
+            },
+            tokenizer(src) {
+                const match = /^<svg\b[\s\S]*?<\/svg>[ \t]*(?:\n+|$)/i.exec(src);
+                if (match) {
+                    return { type: 'svgBlock', raw: match[0], text: match[0] };
+                }
+            },
+            renderer(token) {
+                return token.raw;
+            }
+        };
+
         if (hasMarked) {
             // 块级扩展需先于行内扩展注册，公式块才不会落入标题/段落误判
-            marked.use({ extensions: [mathBlockExtension, mathExtension] });
+            marked.use({ extensions: [svgBlockExtension, mathBlockExtension, mathExtension] });
         }
 
         const defaultContent = `# 欢迎使用 Markdown & LaTeX 编辑器
@@ -646,6 +673,41 @@ editor.addEventListener('input', () => {
     renderTimeout = setTimeout(renderPreview, 300);
 });
 \`\`\`
+
+## 4. 内嵌 HTML / CSS / SVG
+
+文档里可以直接写 HTML、\`<style>\` 和 SVG，脚本与事件属性会被安全过滤掉。
+
+<style>
+.demo-card {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem 1.25rem;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    background: linear-gradient(135deg, #eef2ff, #ffffff);
+}
+.demo-card strong { color: #4f46e5; }
+</style>
+
+<div class="demo-card">
+    <svg width="56" height="56" viewBox="0 0 56 56" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+            <linearGradient id="demo-grad" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stop-color="#6366f1"></stop>
+                <stop offset="100%" stop-color="#a855f7"></stop>
+            </linearGradient>
+        </defs>
+        <circle cx="28" cy="28" r="24" fill="url(#demo-grad)"></circle>
+        <path d="M18 29l7 7 14-15" fill="none" stroke="#fff" stroke-width="4"
+              stroke-linecap="round" stroke-linejoin="round"></path>
+    </svg>
+    <div>
+        <strong>HTML + CSS + SVG</strong><br>
+        <span>样式作用于整篇预览文档，SVG 内联渲染，脚本不会执行。</span>
+    </div>
+</div>
 
 > 💡 提示：点击右上角的 **导出 PDF** 按钮，即可将这份精美的排版生成带有清晰矢量的 PDF 文档。
 `;
