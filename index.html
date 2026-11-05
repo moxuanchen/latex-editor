@@ -225,12 +225,26 @@
             outline: none;
         }
 
+        /* 隐藏镜像：按编辑区同款字体/宽度逐行排版源码，供滚动同步测量“源码行 → 纵向像素”。
+           不可见、不参与主布局；宽度由脚本按编辑区 clientWidth 同步。 */
+        #editor-mirror {
+            position: absolute;
+            top: 0;
+            left: -10000px;
+            visibility: hidden;
+            pointer-events: none;
+            white-space: pre-wrap;
+            overflow-wrap: break-word;
+        }
+        #editor-mirror > div { min-height: var(--mirror-line-height, 0); }
+
         /* 右侧预览区 */
         .dot-preview { background: var(--accent); }
 
         #preview {
             flex: 1;
-            padding: 2.5rem 3rem;
+            /* 顶部留白与编辑区一致，滚动到顶时两栏首行同高 */
+            padding: 1.5rem 3rem 2.5rem;
             overflow-y: auto;
             color: var(--text-preview);
             line-height: 1.8;
@@ -250,6 +264,9 @@
         #preview h3 { font-size: 1.15rem; }
 
         #preview p { margin-bottom: 1.25rem; }
+
+        /* 首个块不留上外边距（标题默认为 1.5~2rem），与编辑区首行对齐 */
+        #preview > :first-child { margin-top: 0; }
 
         #preview a { color: var(--accent); text-decoration: none; border-bottom: 1px solid transparent; transition: border-color 0.2s; }
         #preview a:hover { border-bottom-color: var(--accent); }
@@ -770,10 +787,13 @@ editor.addEventListener('input', () => {
         // 呼叫 MathJax 进行 LaTeX 渲染；尚未就绪时跳过，由就绪回调补渲染
         const typesetMath = () => {
             if (window.MathJax && window.MathJax.typesetPromise) {
-                return MathJax.typesetPromise([preview]).catch(err => {
-                    console.error('MathJax 渲染错误:', err);
-                    showNotice('公式渲染失败，请检查 LaTeX 语法。');
-                });
+                return MathJax.typesetPromise([preview])
+                    // 排版会改变块高，必须重算锚点，否则公式多的文档一开始就错位
+                    .then(() => { rebuildAnchors(); resyncFromEditor(); })
+                    .catch(err => {
+                        console.error('MathJax 渲染错误:', err);
+                        showNotice('公式渲染失败，请检查 LaTeX 语法。');
+                    });
             }
             return Promise.resolve();
         };
@@ -787,10 +807,12 @@ editor.addEventListener('input', () => {
                 return typesetMath();
             }
 
-            // 1. 通过 Marked 转化为 HTML
+            // 1. 通过 Marked 转化为 HTML；同时取顶层 token，用来标注每块的源码行
             let html;
+            let tokens;
             try {
                 html = marked.parse(rawText);
+                tokens = marked.lexer(rawText);
             } catch (err) {
                 // 解析异常时保留上一次的预览结果，避免整块区域变成空白
                 console.error(err);
@@ -800,7 +822,12 @@ editor.addEventListener('input', () => {
             lastRendered = rawText;
             preview.innerHTML = sanitizeHtml(html);
 
-            // 2. 渲染 LaTeX
+            // 2. 标注行号并重建锚点，预览先大致就位，等公式排版完成后再精修
+            tagSourceLines(tokens);
+            rebuildAnchors();
+            resyncFromEditor();
+
+            // 3. 渲染 LaTeX
             typesetMath();
         };
 
@@ -816,47 +843,187 @@ editor.addEventListener('input', () => {
         });
 
         // ==========================================
-        // 简易等比例同步滚动 (方案 B)
+        // 行锚点同步滚动：源码行 ↔ 渲染块逐块对齐，块内线性插值。
+        // 纯等比例映射只在首尾正确，长公式/代码块/标题处会越滚越偏。
         // ==========================================
-        let isSyncingLeft = false;
-        let isSyncingRight = false;
-        let leftSyncFrame = 0;
-        let rightSyncFrame = 0;
+        const anchors = []; // [{ ey: 编辑区内容坐标, py: 预览内容坐标 }]，两个坐标都单调递增
+        const written = new WeakMap(); // 记录程序写入的 scrollTop，用来忽略它触发的回声事件
 
-        // 按比例同步滚动；任一侧无滚动空间时直接跳过
-        const syncScroll = (from, to) => {
-            const fromRange = from.scrollHeight - from.clientHeight;
-            const toRange = to.scrollHeight - to.clientHeight;
-            if (fromRange <= 0 || toRange <= 0) return;
-            to.scrollTop = (from.scrollTop / fromRange) * toRange;
+        // 隐藏镜像：与编辑区同字体、同宽度、同内边距，逐行量出源码行顶部的像素位置
+        const mirror = document.createElement('div');
+        mirror.id = 'editor-mirror';
+        mirror.setAttribute('aria-hidden', 'true');
+        document.body.appendChild(mirror);
+
+        // shortcut: 整篇源码一次性铺进镜像；数万行级别的文档会明显变慢，到那时改为只测锚点行
+        const measureSourceLines = (lines) => {
+            const cs = getComputedStyle(editor);
+            mirror.style.fontFamily = cs.fontFamily;
+            mirror.style.fontSize = cs.fontSize;
+            mirror.style.fontWeight = cs.fontWeight;
+            mirror.style.letterSpacing = cs.letterSpacing;
+            mirror.style.lineHeight = cs.lineHeight;
+            mirror.style.padding = cs.padding;
+            mirror.style.setProperty('--mirror-line-height', cs.lineHeight);
+            // clientWidth 已扣掉滚动条，与 textarea 实际可用的文字宽度一致
+            mirror.style.width = editor.clientWidth + 'px';
+            mirror.replaceChildren(...lines.map(text => {
+                const row = document.createElement('div');
+                row.textContent = text;
+                return row;
+            }));
+            const top = mirror.getBoundingClientRect().top;
+            return Array.from(mirror.children, row => row.getBoundingClientRect().top - top);
         };
 
-        editor.addEventListener('scroll', () => {
-            if (isSyncingLeft) {
-                isSyncingLeft = false;
-                return;
+        // 按 marked 顶层 token 的位置，给预览每个顶层块标注源码起始行
+        const tagSourceLines = (tokens) => {
+            const src = editor.value.replace(/\r\n?/g, '\n');
+            const lineStarts = [0];
+            for (let i = 0; i < src.length; i++) {
+                if (src[i] === '\n') lineStarts.push(i + 1);
             }
+            let linePtr = 0;
+            const lineAt = (pos) => {
+                while (linePtr + 1 < lineStarts.length && lineStarts[linePtr + 1] <= pos) linePtr++;
+                return linePtr;
+            };
+
+            const items = []; // 每个顶层 token 消耗的元素个数，html 块可能不是 1
+            let total = 0;
+            let cursor = 0;
+            for (const token of tokens) {
+                // 链接定义（[ref]: url）等行被 marked 吞掉、不产出 token，
+                // 所以按顺序在源码里找回 token 的实际位置，行号才不会整体错位
+                const at = src.indexOf(token.raw, cursor);
+                const start = at === -1 ? cursor : at;
+                cursor = start + token.raw.length;
+                if (token.type === 'space') continue;
+                let produced = 1;
+                if (token.type === 'html') {
+                    const tpl = document.createElement('template');
+                    // 前置 <p>：DOMPurify 会把开头的 <style> 挪走丢掉，单独净化数量就对不上
+                    tpl.innerHTML = sanitizeHtml('<p></p>' + token.raw);
+                    produced = Math.max(0, tpl.content.children.length - 1);
+                }
+                items.push({ start: lineAt(start), produced });
+                total += produced;
+            }
+            // 整篇净化仍可能丢掉首个 <style>：差额属于第一个块，补在它头上
+            const extra = preview.children.length - total;
+            if (extra < 0 && items.length) items[0].produced = Math.max(0, items[0].produced + extra);
+
+            let el = preview.firstElementChild;
+            for (const { start, produced } of items) {
+                if (!el) break;
+                if (!produced) continue;
+                el.dataset.line = String(start);
+                for (let i = 0; i < produced && el; i++) el = el.nextElementSibling;
+            }
+        };
+
+        const rebuildAnchors = () => {
+            // 打印等场景下编辑区被隐藏，量不出折行，保留旧锚点而不是写入垃圾数据
+            if (!editor.clientWidth) return;
+            const blocks = Array.from(preview.children)
+                .filter(el => el.dataset.line !== undefined && el.getClientRects().length);
+            anchors.length = 0;
+            if (!blocks.length) return;
+            const lineY = measureSourceLines(editor.value.replace(/\r\n?/g, '\n').split('\n'));
+            // 预览内容坐标 = 视口坐标 - 容器顶 + 已滚动距离
+            const previewTop = preview.getBoundingClientRect().top - preview.scrollTop;
+            anchors.push({ ey: 0, py: 0 });
+            for (const el of blocks) {
+                const ey = lineY[Number(el.dataset.line)];
+                const py = el.getBoundingClientRect().top - previewTop;
+                const last = anchors[anchors.length - 1];
+                // 两个坐标都必须单调递增，否则插值会回跳
+                if (ey === undefined || ey <= last.ey || py <= last.py) continue;
+                anchors.push({ ey, py });
+            }
+            // 文末哨兵：两侧按内容总高对齐，最后一屏也能对到底
+            anchors.push({ ey: editor.scrollHeight, py: preview.scrollHeight });
+        };
+
+        // 在一对锚点之间线性插值，把一侧的滚动位置换算到另一侧
+        const mapScroll = (pos, fromKey, toKey) => {
+            if (pos <= anchors[0][fromKey]) return anchors[0][toKey];
+            for (let i = 1; i < anchors.length; i++) {
+                const b = anchors[i];
+                if (pos <= b[fromKey]) {
+                    const a = anchors[i - 1];
+                    const span = b[fromKey] - a[fromKey];
+                    return span > 0 ? a[toKey] + (pos - a[fromKey]) / span * (b[toKey] - a[toKey]) : b[toKey];
+                }
+            }
+            return anchors[anchors.length - 1][toKey];
+        };
+
+        // 窄屏改为上下分栏后两栏不再并排，联动只会互相拽动，直接停用
+        const isStacked = () => window.matchMedia('(max-width: 900px)').matches;
+
+        const setScrollTop = (el, y) => {
+            el.scrollTop = Math.max(0, Math.min(y, el.scrollHeight - el.clientHeight));
+            written.set(el, el.scrollTop);
+        };
+
+        const syncPanels = (from, to, fromKey, toKey) => {
+            if (isStacked() || anchors.length < 2) return;
+            const target = mapScroll(from.scrollTop, fromKey, toKey);
+            if (Math.abs(to.scrollTop - target) >= 1) setScrollTop(to, target);
+        };
+
+        // 内容重建/排版完成后，让右侧重新跟住左侧当前所在的行
+        const resyncFromEditor = () => syncPanels(editor, preview, 'ey', 'py');
+
+        // 程序滚动触发的 scroll 事件用写入值识别，命中即忽略，避免两侧互相推
+        const isEcho = (el) => {
+            const v = written.get(el);
+            return v !== undefined && Math.abs(el.scrollTop - v) < 1;
+        };
+
+        let editorFrame = 0;
+        let previewFrame = 0;
+
+        editor.addEventListener('scroll', () => {
             // 用 rAF 合并高频滚动事件，避免每次滚动都读写布局
-            if (leftSyncFrame) return;
-            leftSyncFrame = requestAnimationFrame(() => {
-                leftSyncFrame = 0;
-                isSyncingRight = true;
-                syncScroll(editor, preview);
+            if (isEcho(editor) || editorFrame) return;
+            editorFrame = requestAnimationFrame(() => {
+                editorFrame = 0;
+                syncPanels(editor, preview, 'ey', 'py');
             });
         });
 
         preview.addEventListener('scroll', () => {
-            if (isSyncingRight) {
-                isSyncingRight = false;
-                return;
-            }
-            if (rightSyncFrame) return;
-            rightSyncFrame = requestAnimationFrame(() => {
-                rightSyncFrame = 0;
-                isSyncingLeft = true;
-                syncScroll(preview, editor);
+            if (isEcho(preview) || previewFrame) return;
+            previewFrame = requestAnimationFrame(() => {
+                previewFrame = 0;
+                syncPanels(preview, editor, 'py', 'ey');
             });
         });
+
+        // 图片加载、窗口缩放、字体就绪都会改变块高或折行，需要重新量锚点
+        preview.addEventListener('load', () => {
+            rebuildAnchors();
+            resyncFromEditor();
+        }, true);
+
+        let resizeFrame = 0;
+        window.addEventListener('resize', () => {
+            if (resizeFrame) return;
+            resizeFrame = requestAnimationFrame(() => {
+                resizeFrame = 0;
+                rebuildAnchors();
+                resyncFromEditor();
+            });
+        });
+
+        if (document.fonts) {
+            const remeasure = () => { rebuildAnchors(); resyncFromEditor(); };
+            document.fonts.ready.then(remeasure);
+            // 网页字体异步到达会改变折行，loaded 之后再量一次
+            document.fonts.addEventListener('loadingdone', remeasure);
+        }
 
         // 打开本地 Markdown 文件
         openBtn.addEventListener('click', () => fileInput.click());
