@@ -425,9 +425,14 @@
                 margin-top: 0 !important;
                 padding-top: 0 !important;
             }
-            /* 防止公式或代码块被跨页截断 */
-            pre, blockquote, table, figure, .MathJax_Display {
+            /* 防止公式、代码块或插图被跨页截断 */
+            pre, blockquote, table, figure, .MathJax_Display, mjx-container[display="true"] {
+                break-inside: avoid;
                 page-break-inside: avoid;
+            }
+            /* 防止内嵌 SVG 在打印时超出单页可印高度而产生大块异常空白 */
+            #preview svg:not(mjx-container svg) {
+                max-height: 230mm;
             }
             h1, h2, h3, h4 {
                 page-break-after: avoid;
@@ -624,23 +629,72 @@
 
         /**
          * 自定义 Marked.js 块级扩展
-         * 目的: 让整段内联 <svg> 原样进入预览区。
-         * <svg> 不在 CommonMark 的块级标签名单里，多行 SVG 会被当成普通段落解析，
-         * 元素之间的换行和文本里的 _ * 会被 Markdown 处理，图形随即错乱。
-         * SVG 内部允许空行，所以一直吃到配对的 </svg>，而不是遇到空行就停。
+         * 目的: 让整段内联 <svg>（含被 <figure>/<div> 等容器包裹且内部含空行的情况）
+         * 原样进入预览区。
+         * 1) <svg> 不在 CommonMark 的块级标签名单里，多行 SVG 会被当成普通段落解析；
+         * 2) 外层 <figure>/<div> 等虽是块级标签，但按 CommonMark 规则遇到空行即结束，
+         *    导致 <svg> 内部空行后的 <text> 等标签被包进 <p>，触发 HTML5 规则提前闭合 </svg>，
+         *    只剩空壳 <svg> 占住整块版面高度，造成导出 PDF 时页面中出现大片异常空白。
          */
+        const findMatchingTagEnd = (src, tagName, startPos) => {
+            const lowerTag = tagName.toLowerCase();
+            const attrPattern = '(?:[^>"\']|"[^"]*"|\'[^\']*\')*';
+            // 跳过注释；当外层为非 svg 容器时，整体跳过内部 <svg>...</svg> 再统计同名开闭标签
+            const tokenRe = new RegExp(
+                `<!--([\\s\\S]*?)-->|<\\/?${lowerTag}\\b(${attrPattern})>|<(\\/?)svg\\b(${attrPattern})>`,
+                'gi'
+            );
+            tokenRe.lastIndex = startPos;
+            let depth = 1;
+            let svgDepth = lowerTag === 'svg' ? 1 : 0;
+            let match;
+            while ((match = tokenRe.exec(src)) !== null) {
+                if (match[0].startsWith('<!--')) continue;
+                if (lowerTag !== 'svg' && match[3] !== undefined) {
+                    const isCloseSvg = match[3] === '/';
+                    const isSelfCloseSvg = !isCloseSvg && /\/\s*$/.test(match[4] || '');
+                    if (isCloseSvg) {
+                        if (svgDepth > 0) svgDepth--;
+                    } else if (!isSelfCloseSvg) {
+                        svgDepth++;
+                    }
+                    continue;
+                }
+                if (svgDepth > 0 && lowerTag !== 'svg') continue;
+                const isClose = match[0][1] === '/';
+                const isSelfClose = !isClose && /\/\s*$/.test(match[2] || '');
+                if (isClose) {
+                    depth--;
+                    if (depth === 0) return tokenRe.lastIndex;
+                } else if (!isSelfClose) {
+                    depth++;
+                }
+            }
+            return -1;
+        };
+
         const svgBlockExtension = {
             name: 'svgBlock',
             level: 'block',
             start(src) {
-                const found = src.match(/^<svg\b/im);
+                const found = src.match(/^[ ]{0,3}<[a-zA-Z]/m);
                 return found ? found.index : undefined;
             },
             tokenizer(src) {
-                const match = /^<svg\b[\s\S]*?<\/svg>[ \t]*(?:\n+|$)/i.exec(src);
-                if (match) {
-                    return { type: 'svgBlock', raw: match[0], text: match[0] };
+                const openMatch = /^[ ]{0,3}<([a-zA-Z][\w:-]*)\b(?:[^>"']|"[^"]*"|'[^']*')*>/.exec(src);
+                if (!openMatch || /\/\s*>$/.test(openMatch[0])) return;
+                const tagName = openMatch[1];
+                if (tagName.toLowerCase() !== 'svg') {
+                    // 仅接管首个空行前即包含 <svg> 的 HTML 容器，避免吞掉普通 <div> 内的 Markdown
+                    const beforeBlank = src.split(/\n[ \t]*\n/, 1)[0];
+                    if (!/<svg\b/i.test(beforeBlank)) return;
                 }
+                const endIdx = findMatchingTagEnd(src, tagName, openMatch[0].length);
+                if (endIdx === -1) return;
+                const tailMatch = /^[ \t]*(?:\n+|$)/.exec(src.slice(endIdx));
+                if (!tailMatch) return;
+                const raw = src.slice(0, endIdx + tailMatch[0].length);
+                return { type: 'svgBlock', raw, text: raw };
             },
             renderer(token) {
                 return token.raw;
@@ -900,7 +954,7 @@ editor.addEventListener('input', () => {
                 cursor = start + token.raw.length;
                 if (token.type === 'space') continue;
                 let produced = 1;
-                if (token.type === 'html') {
+                if (token.type === 'html' || token.type === 'svgBlock') {
                     const tpl = document.createElement('template');
                     // 前置 <p>：DOMPurify 会把开头的 <style> 挪走丢掉，单独净化数量就对不上
                     tpl.innerHTML = sanitizeHtml('<p></p>' + token.raw);
